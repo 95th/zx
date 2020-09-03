@@ -180,6 +180,7 @@ impl TypeCheckerCore {
         let mut type_pairs_to_check = vec![];
         while let Some((lhs, rhs)) = pending_edges.pop() {
             self.r.add_edge(lhs.0, rhs.0, &mut type_pairs_to_check);
+
             while let Some((lhs, rhs)) = type_pairs_to_check.pop() {
                 if let TypeNode::Value(lhs_head) = &self.types[lhs] {
                     if let TypeNode::Use(rhs_head) = &self.types[rhs] {

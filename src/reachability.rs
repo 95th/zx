@@ -1,41 +1,59 @@
 use crate::ty::ID;
-use std::collections::HashSet;
+use std::{collections::HashSet, hash::Hash};
+
+#[derive(Default, Clone)]
+struct OrderedSet<T> {
+    v: Vec<T>,
+    s: HashSet<T>,
+}
+
+impl<T> OrderedSet<T>
+where
+    T: Eq + Hash + Clone,
+{
+    fn insert(&mut self, value: T) -> bool {
+        if self.s.insert(value.clone()) {
+            self.v.push(value);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &T> {
+        self.v.iter()
+    }
+}
 
 #[derive(Default, Clone)]
 pub struct Reachability {
-    upsets: Vec<HashSet<ID>>,
-    downsets: Vec<HashSet<ID>>,
+    upsets: Vec<OrderedSet<ID>>,
+    downsets: Vec<OrderedSet<ID>>,
 }
 
 impl Reachability {
     pub fn add_node(&mut self) -> ID {
         let i = self.upsets.len();
-
-        let mut set = HashSet::with_capacity(1);
-        set.insert(i);
-
-        self.upsets.push(set.clone());
-        self.downsets.push(set);
+        self.upsets.push(Default::default());
+        self.downsets.push(Default::default());
         i
     }
 
     pub fn add_edge(&mut self, lhs: ID, rhs: ID, out: &mut Vec<(ID, ID)>) {
-        if self.downsets[lhs].contains(&rhs) {
-            return;
-        }
+        let mut work = vec![(lhs, rhs)];
+        while let Some((lhs, rhs)) = work.pop() {
+            if !self.downsets[lhs].insert(rhs) {
+                continue;
+            }
 
-        let mut lhs_set: Vec<_> = self.upsets[lhs].iter().copied().collect();
-        lhs_set.sort_unstable();
+            self.upsets[lhs].insert(lhs);
+            out.push((lhs, rhs));
 
-        let mut rhs_set: Vec<_> = self.downsets[rhs].iter().copied().collect();
-        rhs_set.sort_unstable();
-
-        for lhs2 in lhs_set {
-            for &rhs2 in &rhs_set {
-                if self.downsets[lhs2].insert(rhs2) {
-                    self.upsets[rhs2].insert(lhs2);
-                    out.push((lhs2, rhs2));
-                }
+            for lhs2 in self.upsets[lhs].iter().copied() {
+                work.push((lhs2, rhs));
+            }
+            for rhs2 in self.downsets[rhs].iter().copied() {
+                work.push((lhs, rhs2));
             }
         }
     }
