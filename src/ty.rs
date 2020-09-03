@@ -1,12 +1,14 @@
-use crate::ast;
+use crate::{ast, reachability};
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Copy, Clone)]
-pub struct Value;
+pub type ID = usize;
 
-#[derive(Copy, Clone)]
-pub struct Use;
+#[derive(Debug, Copy, Clone)]
+pub struct Value(ID);
+
+#[derive(Debug, Copy, Clone)]
+pub struct Use(ID);
 
 struct Bindings {
     m: HashMap<String, Value>,
@@ -47,48 +49,147 @@ impl Bindings {
     }
 }
 
+#[derive(Debug, Clone)]
+enum VTypeHead {
+    VBool,
+    VFunc { arg: Use, ret: Value },
+    VObj { fields: HashMap<String, Value> },
+    VCase { case: (String, Value) },
+}
+
+#[derive(Debug, Clone)]
+enum UTypeHead {
+    UBool,
+    UFunc { arg: Value, ret: Use },
+    UObj { field: (String, Use) },
+    UCase { cases: HashMap<String, Use> },
+}
+
+fn check_heads(lhs: &VTypeHead, rhs: &UTypeHead, out: &mut Vec<(Value, Use)>) -> Result<()> {
+    use UTypeHead::*;
+    use VTypeHead::*;
+
+    match (lhs, rhs) {
+        (VBool, UBool) => Ok(()),
+        (
+            &VFunc {
+                arg: arg1,
+                ret: ret1,
+            },
+            &UFunc {
+                arg: arg2,
+                ret: ret2,
+            },
+        ) => {
+            out.push((ret1, ret2));
+            out.push((arg2, arg1));
+            Ok(())
+        }
+        (VObj { fields }, UObj { field: (name, rhs) }) => match fields.get(name) {
+            Some(lhs) => {
+                out.push((*lhs, *rhs));
+                Ok(())
+            }
+            None => bail!("Missing field: {}", name),
+        },
+        (VCase { case: (name, lhs) }, UCase { cases }) => match cases.get(name) {
+            Some(rhs) => {
+                out.push((*lhs, *rhs));
+                Ok(())
+            }
+            None => bail!("Unhandled case: {}", name),
+        },
+        _ => bail!("Unexpected types"),
+    }
+}
+
+#[derive(Debug, Clone)]
+enum TypeNode {
+    Var,
+    Value(VTypeHead),
+    Use(UTypeHead),
+}
+
 #[derive(Clone)]
-pub struct TypeCheckerCore {}
+pub struct TypeCheckerCore {
+    r: reachability::Reachability,
+    types: Vec<TypeNode>,
+}
 
 impl TypeCheckerCore {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            r: Default::default(),
+            types: vec![],
+        }
+    }
+
+    fn new_val(&mut self, val_type: VTypeHead) -> Value {
+        let i = self.r.add_node();
+        assert!(i == self.types.len());
+        self.types.push(TypeNode::Value(val_type));
+        Value(i)
+    }
+
+    fn new_use(&mut self, constraint: UTypeHead) -> Use {
+        let i = self.r.add_node();
+        assert!(i == self.types.len());
+        self.types.push(TypeNode::Use(constraint));
+        Use(i)
     }
 
     pub fn var(&mut self) -> (Value, Use) {
-        todo!()
+        let i = self.r.add_node();
+        assert!(i == self.types.len());
+        self.types.push(TypeNode::Var);
+        (Value(i), Use(i))
     }
 
     fn bool(&mut self) -> Value {
-        todo!()
+        self.new_val(VTypeHead::VBool)
     }
     fn bool_use(&mut self) -> Use {
-        todo!()
+        self.new_use(UTypeHead::UBool)
     }
 
     fn func(&mut self, arg: Use, ret: Value) -> Value {
-        todo!()
+        self.new_val(VTypeHead::VFunc { arg, ret })
     }
     fn func_use(&mut self, arg: Value, ret: Use) -> Use {
-        todo!()
+        self.new_use(UTypeHead::UFunc { arg, ret })
     }
 
     fn obj(&mut self, fields: Vec<(String, Value)>) -> Value {
-        todo!()
+        let fields = fields.into_iter().collect();
+        self.new_val(VTypeHead::VObj { fields })
     }
     fn obj_use(&mut self, field: (String, Use)) -> Use {
-        todo!()
+        self.new_use(UTypeHead::UObj { field })
     }
 
     fn case(&mut self, case: (String, Value)) -> Value {
-        todo!()
+        self.new_val(VTypeHead::VCase { case })
     }
     fn case_use(&mut self, cases: Vec<(String, Use)>) -> Use {
-        todo!()
+        let cases = cases.into_iter().collect();
+        self.new_use(UTypeHead::UCase { cases })
     }
 
     fn flow(&mut self, lhs: Value, rhs: Use) -> Result<()> {
-        todo!()
+        let mut pending_edges = vec![(lhs, rhs)];
+        let mut type_pairs_to_check = vec![];
+        while let Some((lhs, rhs)) = pending_edges.pop() {
+            self.r.add_edge(lhs.0, rhs.0, &mut type_pairs_to_check);
+            while let Some((lhs, rhs)) = type_pairs_to_check.pop() {
+                if let TypeNode::Value(lhs_head) = &self.types[lhs] {
+                    if let TypeNode::Use(rhs_head) = &self.types[rhs] {
+                        check_heads(lhs_head, rhs_head, &mut pending_edges)?;
+                    }
+                }
+            }
+        }
+        assert!(pending_edges.is_empty() && type_pairs_to_check.is_empty());
+        Ok(())
     }
 }
 
